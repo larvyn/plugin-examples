@@ -1,0 +1,54 @@
+<!doctype html>
+<!--
+  The smallest plugin view, and the one to copy. Larvyn runs it in a
+  sandboxed iframe, so it can't reach Larvyn's page or your files.
+  Everything goes through window.larvyn, and Larvyn checks each call
+  against the permissions in larvyn.json.
+
+  The look comes from Larvyn's plugin kit (one <link>, lv- classes), so the
+  view matches Larvyn and follows its accent colour.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hello</title>
+<link rel="stylesheet" href="/plugin-view/_kit/larvyn.css">
+</head>
+<body class="lv-page">
+<header class="lv-header">
+  <h1>Hello</h1>
+  <span class="lv-badge accent">plugin</span>
+</header>
+<main class="lv-body lv-pad">
+  <div class="lv-card" style="max-width: 520px">
+    <div class="lv-card-head"><h3 id="title">Hello!</h3></div>
+    <div class="lv-card-body lv-stack">
+      <dl class="lv-kv" id="info">
+        <dt>Project</dt><dd id="name" class="lv-muted">Open this view inside Larvyn to see your project.</dd>
+        <dt>Folder</dt><dd id="path" class="lv-mono lv-small">—</dd>
+      </dl>
+      <div class="lv-row">
+        <button class="lv-btn primary sm" id="wave" disabled>Say hello</button>
+      </div>
+    </div>
+  </div>
+</main>
+<script>
+async function main() {
+  if (!window.larvyn) return;
+  // Needs "project.read".
+  const project = await window.larvyn.call("project.info");
+  document.getElementById("title").textContent = `Hello, ${project.name}!`;
+  document.getElementById("name").textContent = project.name;
+  document.getElementById("name").className = "";
+  document.getElementById("path").textContent = project.path;
+
+  // Needs "ui.notify". Without it in larvyn.json, Larvyn refuses the call.
+  const wave = document.getElementById("wave");
+  wave.disabled = false;
+  wave.addEventListener("click", () => window.larvyn.call("ui.notify", { message: `Hello from ${project.name}` }));
+}
+main();
+</script>
+</body>
+</html>

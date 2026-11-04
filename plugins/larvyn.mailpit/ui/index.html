@@ -1,0 +1,388 @@
+<!doctype html>
+<!--
+  Mailpit inbox. Plain HTML and JS, no build step.
+
+  Inside Larvyn the view has no network access of its own: it asks Larvyn
+  to fetch for it (network.fetch), and Larvyn only fetches from the hosts
+  listed under "network" in larvyn.json, here localhost:8025. That also
+  means Mailpit needs no CORS setting. Opened directly in a browser, for
+  testing, it falls back to fetch(), which needs mailpit --api-cors.
+
+  Messages are shown as text only: an email's HTML is never rendered, so
+  nothing in a message can run or load anything.
+
+  Settings shows where the open app sends its mail and can point it at
+  Mailpit. Larvyn lets the view read and change only MAIL_MAILER, MAIL_HOST
+  and MAIL_PORT (the "env" list in larvyn.json), never the rest of .env.
+-->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mail</title>
+<link rel="stylesheet" href="/plugin-view/_kit/larvyn.css">
+<style>
+  /* Only what is specific to this view: the rest is Larvyn's plugin kit. */
+  body { display: flex; flex-direction: column; }
+  .lv-input.search { width: 220px; }
+  .lv-btn svg { width: 13px; height: 13px; }
+
+  main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(260px, 360px) 1fr; }
+  main.single { grid-template-columns: 1fr; }
+  .list { overflow-y: auto; border-right: 1px solid var(--lv-line); }
+  .item { display: grid; grid-template-columns: 32px 1fr auto; gap: 10px; align-items: start; width: 100%; text-align: left; padding: 11px 14px; background: none; border: 0; border-bottom: 1px solid var(--lv-line); }
+  .item:hover { background: var(--lv-bg-2); }
+  .item.active { background: var(--lv-bg-3); box-shadow: inset 2px 0 0 var(--lv-accent); }
+  .item > div { min-width: 0; }
+  .avatar { width: 32px; height: 32px; border-radius: 9px; display: grid; place-items: center; font-size: 12px; font-weight: 650; color: #fff; }
+  .item .who { font-weight: 600; font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item.unread .who::after { content: ""; display: inline-block; width: 6px; height: 6px; border-radius: 50%; background: var(--lv-accent); margin-left: 6px; vertical-align: 2px; }
+  .item .subject { font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item.unread .subject { font-weight: 600; }
+  .item .snippet { font-size: 11.5px; color: var(--lv-text-3); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .item .when { font-size: 11px; color: var(--lv-text-3); white-space: nowrap; }
+
+  .detail { overflow-y: auto; }
+  .detail .head { padding: 20px 24px 16px; border-bottom: 1px solid var(--lv-line); }
+  .detail h2 { margin: 0 0 12px; font-size: 17px; font-weight: 620; }
+  .tags { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 12px; }
+  .body { padding: 20px 24px 32px; margin: 0; font: 12.5px/1.65 var(--lv-mono); color: var(--lv-text); white-space: pre-wrap; word-break: break-word; }
+  .center { display: grid; place-items: center; padding: 40px 24px; text-align: center; height: 100%; color: var(--lv-text-3); }
+
+  .lv-banner .err { color: #ff8a84; }
+  .settings { padding: 16px 18px 18px; border-bottom: 1px solid var(--lv-line); background: var(--lv-bg-2); }
+  .settings h3 { margin: 0 0 4px; font-size: 13px; font-weight: 620; }
+  .settings > p { margin: 0 0 12px; color: var(--lv-text-3); font-size: 12px; }
+  .env { display: grid; grid-template-columns: 130px 1fr 1fr 18px; gap: 6px 14px; align-items: center; font-size: 12px; max-width: 560px; margin-bottom: 14px; }
+  .env .th { color: var(--lv-text-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .env .ok { color: var(--lv-green); }
+  .env .bad { color: var(--lv-yellow); }
+  .settings .note { margin-top: 10px; font-size: 11.5px; color: var(--lv-text-3); max-width: 560px; }
+  .settings .done { color: var(--lv-green); }
+  .settings .err { color: #ff8a84; margin: 0; font-size: 12px; }
+</style>
+</head>
+<body>
+<header class="lv-header">
+  <h1>Mail</h1>
+  <span class="lv-badge" id="count" hidden></span>
+  <span class="lv-status" id="status">Connecting…</span>
+  <span class="lv-spacer"></span>
+  <input class="lv-input search" id="search" type="search" placeholder="Search mail…" hidden>
+  <button class="lv-btn sm" id="gear" title="App mail settings">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12.2 2h-.4a2 2 0 0 0-2 2v.2a2 2 0 0 1-1 1.7l-.4.3a2 2 0 0 1-2 0l-.2-.1a2 2 0 0 0-2.7.7l-.2.4a2 2 0 0 0 .7 2.7l.2.1a2 2 0 0 1 1 1.7v.5a2 2 0 0 1-1 1.7l-.2.1a2 2 0 0 0-.7 2.7l.2.4a2 2 0 0 0 2.7.7l.2-.1a2 2 0 0 1 2 0l.4.3a2 2 0 0 1 1 1.7v.2a2 2 0 0 0 2 2h.4a2 2 0 0 0 2-2v-.2a2 2 0 0 1 1-1.7l.4-.3a2 2 0 0 1 2 0l.2.1a2 2 0 0 0 2.7-.7l.2-.4a2 2 0 0 0-.7-2.7l-.2-.1a2 2 0 0 1-1-1.7v-.5a2 2 0 0 1 1-1.7l.2-.1a2 2 0 0 0 .7-2.7l-.2-.4a2 2 0 0 0-2.7-.7l-.2.1a2 2 0 0 1-2 0l-.4-.3a2 2 0 0 1-1-1.7V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+    Settings
+  </button>
+  <button class="lv-btn sm" id="refresh" title="Refresh">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></svg>
+    Refresh
+  </button>
+</header>
+<div class="lv-banner warn" id="banner" hidden></div>
+<section class="settings" id="settings" hidden></section>
+<main id="main" class="single"></main>
+
+<script>
+const BASE = "http://localhost:8025/api/v1";
+const ICON_MAIL = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 6L2 7"/></svg>';
+const ICON_PLUG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 22v-5"/><path d="M9 8V2"/><path d="M15 8V2"/><path d="M18 8v5a6 6 0 0 1-12 0V8z"/></svg>';
+
+let messages = [];
+let selected = null;
+let query = "";
+let online = null;
+
+// getJSON reads a URL through Larvyn when running inside it.
+async function getJSON(url) {
+  if (window.larvyn) {
+    const res = await window.larvyn.call("network.fetch", { url });
+    if (res.status !== 200) throw new Error(`HTTP ${res.status}`);
+    return JSON.parse(res.body);
+  }
+  return (await fetch(url)).json();
+}
+
+const $ = (id) => document.getElementById(id);
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text != null) e.textContent = text;
+  return e;
+}
+
+// A stable colour per sender, from a small palette that reads on dark.
+const COLORS = ["#ff2d20", "#4c8dff", "#a77bff", "#2dd4bf", "#ff9f43", "#3ddc84", "#f472b6"];
+function colorFor(s) {
+  let h = 0;
+  for (const c of s) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return COLORS[h % COLORS.length];
+}
+function initials(from) {
+  const s = (from?.Name || from?.Address || "?").trim();
+  const parts = s.split(/[\s@._-]+/).filter(Boolean);
+  return ((parts[0]?.[0] ?? "?") + (parts[1]?.[0] ?? "")).toUpperCase();
+}
+function addr(a) {
+  if (!a) return "";
+  return a.Name ? `${a.Name} <${a.Address}>` : a.Address;
+}
+function ago(iso) {
+  const s = Math.max(0, (Date.now() - new Date(iso).getTime()) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+function size(n) {
+  return n < 1024 ? `${n} B` : n < 1 << 20 ? `${(n / 1024).toFixed(1)} KB` : `${(n / (1 << 20)).toFixed(1)} MB`;
+}
+
+function setStatus(on, text) {
+  online = on;
+  const s = $("status");
+  s.className = "lv-status " + (on ? "on" : "warn");
+  s.textContent = text;
+}
+
+function showCard(icon, title, text, code) {
+  const main = $("main");
+  main.className = "single";
+  const card = el("div", "lv-empty");
+  const ico = el("div", "lv-ico");
+  ico.innerHTML = icon;
+  card.append(ico, el("h3", null, title), el("p", null, text));
+  if (code) {
+    const pre = el("pre", "lv-code");
+    // Each line is [highlighted part, rest].
+    for (const [k, v] of code) {
+      const line = el("div");
+      line.append(el("b", null, k), document.createTextNode(v));
+      pre.append(line);
+    }
+    card.append(pre);
+  }
+  main.replaceChildren(card);
+}
+
+function renderList() {
+  const q = query.toLowerCase();
+  const shown = messages.filter((m) => !q || [m.Subject, m.Snippet, m.From?.Address, m.From?.Name, ...(m.To || []).map((t) => t.Address)].join(" ").toLowerCase().includes(q));
+  const list = el("div", "list");
+  for (const m of shown) {
+    const b = el("button", "item" + (m.Read ? "" : " unread") + (m.ID === selected ? " active" : ""));
+    const av = el("div", "avatar", initials(m.From));
+    av.style.background = colorFor(m.From?.Address || "");
+    const mid = el("div");
+    mid.append(el("div", "who", m.From?.Name || m.From?.Address || "(unknown sender)"), el("div", "subject", m.Subject || "(no subject)"), el("div", "snippet", m.Snippet || ""));
+    b.append(av, mid, el("div", "when", ago(m.Created)));
+    b.addEventListener("click", () => open(m.ID));
+    list.append(b);
+  }
+  if (shown.length === 0) list.append(el("div", "center muted", "No messages match."));
+  return list;
+}
+
+async function render() {
+  const main = $("main");
+  const detail = el("div", "detail");
+  main.className = "";
+  main.replaceChildren(renderList(), detail);
+  if (!selected) {
+    detail.append(el("div", "center muted", "Select a message to read it."));
+    return;
+  }
+  let msg;
+  try {
+    msg = await getJSON(`${BASE}/message/${encodeURIComponent(selected)}`);
+  } catch {
+    detail.append(el("div", "center muted", "Could not open this message."));
+    return;
+  }
+  const head = el("div", "head");
+  head.append(el("h2", null, msg.Subject || "(no subject)"));
+  const meta = el("dl", "lv-kv");
+  const row = (k, v) => v && meta.append(el("dt", null, k), el("dd", null, v));
+  row("From", addr(msg.From));
+  row("To", (msg.To || []).map(addr).join(", "));
+  row("Cc", (msg.Cc || []).map(addr).join(", "));
+  row("Date", new Date(msg.Date).toLocaleString());
+  head.append(meta);
+  const tags = el("div", "tags");
+  if (msg.Size) tags.append(el("span", "lv-badge mono", size(msg.Size)));
+  for (const a of msg.Attachments || []) tags.append(el("span", "lv-badge mono", "📎 " + a.FileName));
+  if (msg.HTML) tags.append(el("span", "lv-badge", "HTML shown as text"));
+  if (tags.childElementCount) head.append(tags);
+  // Text only: the HTML part is turned into plain text, never rendered.
+  const text = msg.Text || (msg.HTML ? new DOMParser().parseFromString(msg.HTML, "text/html").body.textContent : "");
+  detail.append(head, el("pre", "body", (text || "(empty message)").trim()));
+  const m = messages.find((x) => x.ID === selected);
+  if (m && !m.Read) {
+    m.Read = true;
+    renderCount();
+  }
+}
+
+function open(id) {
+  selected = id;
+  render();
+}
+
+function renderCount() {
+  const c = $("count");
+  const unread = messages.filter((m) => !m.Read).length;
+  c.hidden = messages.length === 0;
+  c.className = "lv-badge" + (unread ? " accent" : "");
+  c.textContent = unread ? `${unread} new` : `${messages.length}`;
+}
+
+async function load(manual) {
+  const btn = $("refresh");
+  if (manual) btn.classList.add("spin");
+  let data;
+  try {
+    data = await getJSON(`${BASE}/messages?limit=100`);
+  } catch {
+    setStatus(false, "Not running");
+    messages = [];
+    renderCount();
+    $("search").hidden = true;
+    showCard(ICON_PLUG, "Mailpit isn't running", "Start Mailpit from the Stack in the sidebar, then point your app's mail at it in .env:", [["MAIL_MAILER", "=smtp"], ["MAIL_HOST", "=127.0.0.1"], ["MAIL_PORT", "=1025"]]);
+    return;
+  } finally {
+    btn.classList.remove("spin");
+  }
+  const before = messages.map((m) => m.ID).join();
+  messages = data.messages || [];
+  setStatus(true, "Running on :8025");
+  renderCount();
+  $("search").hidden = messages.length === 0;
+  if (messages.length === 0) {
+    selected = null;
+    showCard(ICON_MAIL, "No mail yet", "Mail your app sends shows up here. Try it from Tinker:", [["Mail::raw", "('Hi!', fn ($m) => $m->to('you@example.test'));"]]);
+    return;
+  }
+  if (selected && !messages.some((m) => m.ID === selected)) selected = null;
+  if (!selected) selected = messages[0].ID;
+  // Only redraw when something changed, so reading isn't interrupted.
+  if (manual || before !== messages.map((m) => m.ID).join() || $("main").classList.contains("single")) render();
+}
+
+// The app's mail settings, read and changed through Larvyn, which only
+// allows the three keys listed under "env" in larvyn.json.
+const WANT = { MAIL_MAILER: "smtp", MAIL_HOST: "127.0.0.1", MAIL_PORT: "1025" };
+let appEnv = null; // null: not known (outside Larvyn, or no project open)
+let envError = ""; // why reading the settings failed, when it did
+let settingsOpen = false;
+let fixed = false;
+
+const fine = (k) => {
+  const v = String(appEnv?.[k] ?? "");
+  return k === "MAIL_HOST" ? v === "127.0.0.1" || v === "localhost" : v === WANT[k];
+};
+const pointedAtMailpit = () => appEnv && Object.keys(WANT).every(fine);
+
+async function loadEnv() {
+  if (!window.larvyn) return;
+  try {
+    appEnv = await window.larvyn.call("project.env.get");
+    envError = "";
+  } catch (e) {
+    appEnv = null;
+    envError = e.message === "no project is open" ? "" : e.message;
+  }
+  renderEnv();
+}
+
+async function pointAtMailpit(btn) {
+  btn.disabled = true;
+  try {
+    await window.larvyn.call("project.env.set", { values: WANT });
+    fixed = true;
+    await loadEnv();
+    // .env changed; the app only follows once its config is reloaded.
+    window.larvyn.call("ui.notify", { message: ".env now points at Mailpit. Restart the Queue worker (and run config:clear if the config is cached) for it to take effect." }).catch(() => {});
+  } catch (e) {
+    btn.disabled = false;
+    alertLine(e.message);
+  }
+}
+
+// Shows an error where the user clicked: the settings note when the panel
+// is open, otherwise the banner (its button stays, to try again).
+function alertLine(text) {
+  const p = $("settings").querySelector(".note");
+  if (!$("settings").hidden && p) {
+    p.textContent = text;
+    return;
+  }
+  const banner = $("banner");
+  banner.querySelector(".err")?.remove();
+  const err = el("span", "err", text);
+  banner.insertBefore(err, banner.querySelector(".lv-btn"));
+  banner.hidden = false;
+}
+
+function fixButton(label) {
+  const b = el("button", "lv-btn primary sm", label);
+  b.addEventListener("click", () => pointAtMailpit(b));
+  return b;
+}
+
+function renderEnv() {
+  const banner = $("banner");
+  if (appEnv && !pointedAtMailpit() && !settingsOpen) {
+    const mailer = appEnv.MAIL_MAILER ?? "(not set)";
+    const why = mailer !== "smtp" ? `Your app sends mail to ${mailer === "log" ? "the log" : mailer}, not Mailpit.` : "Your app's mail settings don't point at Mailpit.";
+    const text = el("span", null, why + " ");
+    const code = el("code", null, `MAIL_MAILER=${mailer} · MAIL_PORT=${appEnv.MAIL_PORT ?? "(not set)"}`);
+    banner.replaceChildren(text, code, fixButton("Point app at Mailpit"));
+    banner.hidden = false;
+  } else {
+    banner.hidden = true;
+  }
+
+  $("gear").classList.toggle("on", settingsOpen);
+  const sec = $("settings");
+  sec.hidden = !settingsOpen;
+  if (!settingsOpen) return;
+  sec.replaceChildren();
+  sec.append(el("h3", null, "App mail settings"), el("p", null, "Where the open project sends its mail, from its .env."));
+  if (!appEnv) {
+    if (envError) sec.append(el("p", "err", "Could not read the app's mail settings: " + envError));
+    else sec.append(el("p", "lv-muted", window.larvyn ? "Open a project to see its mail settings." : "Open this view in Larvyn to see the app's mail settings."));
+    return;
+  }
+  const grid = el("div", "env");
+  for (const h of ["Key", "Now", "For Mailpit", ""]) grid.append(el("div", "th", h));
+  for (const k of Object.keys(WANT)) {
+    const ok = fine(k);
+    grid.append(el("code", null, k), el("code", ok ? "ok" : "bad", appEnv[k] ?? "(not set)"), el("code", null, WANT[k]), el("span", ok ? "ok" : "bad", ok ? "✓" : "•"));
+  }
+  sec.append(grid);
+  if (pointedAtMailpit()) {
+    sec.append(el("div", "done", fixed ? ".env now points at Mailpit. Tinker uses it right away; restart the Queue worker, and run php artisan config:clear if the config is cached." : ".env already points at Mailpit."));
+  } else {
+    sec.append(fixButton("Point app at Mailpit"));
+  }
+  sec.append(el("p", "note", "Larvyn backs up .env before changing it. Tinker uses the new settings right away; restart the Queue worker for queued mail, and run php artisan config:clear if the config is cached."));
+}
+
+$("gear").addEventListener("click", () => {
+  settingsOpen = !settingsOpen;
+  renderEnv();
+});
+$("refresh").addEventListener("click", () => {
+  load(true);
+  loadEnv();
+});
+$("search").addEventListener("input", (e) => {
+  query = e.target.value;
+  const list = document.querySelector(".list");
+  if (list) list.replaceWith(renderList());
+});
+load();
+loadEnv();
+setInterval(load, 5000);
+setInterval(loadEnv, 15000);
+</script>
+</body>
+</html>
